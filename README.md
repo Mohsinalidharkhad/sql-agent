@@ -68,7 +68,7 @@ This project implements a natural language to SQL agent using LangChain and Supa
    ```
 
 2. Enter your questions in natural language. The agent will:
-   - Convert your question to SQL using GPT-4-turbo
+   - Convert your question to SQL using GPT-4o-mini
    - Use vector database for complex column matching
    - Validate the generated SQL for safety
    - Execute the query against your Supabase database
