@@ -12,6 +12,10 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import MessagesPlaceholder
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
+from langchain.agents.agent_toolkits import create_retriever_tool
+from langchain_pinecone import PineconeVectorStore
+from pinecone import Pinecone
+from langchain_openai import OpenAIEmbeddings
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -20,6 +24,50 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 logger.info("Environment variables loaded")
+
+def read_schema_from_markdown() -> str:
+    """Read and return the database schema from the markdown file."""
+    try:
+        schema_path = os.path.join(os.path.dirname(__file__), 'db_schema.md')
+        with open(schema_path, 'r') as file:
+            schema_content = file.read()
+            
+        # Add 8 spaces of indentation to each line
+        indented_content = '\n'.join('        ' + line if line.strip() else line.strip() 
+                                   for line in schema_content.splitlines())
+        
+        logger.info("Successfully read database schema from markdown file")
+        return indented_content
+    except Exception as e:
+        logger.error(f"Failed to read schema file: {str(e)}")
+        raise
+
+# Initialize OpenAI embeddings
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-3-small",
+    openai_api_key=os.environ.get("OPENAI_API_KEY")
+)
+
+# Initialize Pinecone
+pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
+index_name = "restaurant-db"
+index = pc.Index(index_name)
+vector_store = PineconeVectorStore(embedding=embeddings, index=index)
+
+retriever = vector_store.as_retriever(
+    search_kwargs={"k": 10},
+    # search_type="similarity"
+)
+description = (
+    "Use to look up values to filter on. Input is an approximate spelling "
+    "of the proper noun, output is valid proper nouns with their source information. "
+    "Use the noun most similar to the search."
+)
+retriever_tool = create_retriever_tool(
+    retriever,
+    name="search_proper_nouns",
+    description=description,
+)
 
 def get_supabase_connection_string() -> str:
     """Get Supabase connection string from environment variables."""
@@ -62,31 +110,38 @@ def setup_agent(db: SQLDatabase) -> AgentExecutor:
         
         toolkit = SQLDatabaseToolkit(db=db, llm=llm)
         tools = toolkit.get_tools()
+        tools.append(retriever_tool)
         logger.info(f"Created tools: {[tool.name for tool in tools]}")
 
-        template = """You are an agent designed to interact with a SQL database.
-        Given an input question, create a syntactically correct {dialect} query to run, then look at the results of the query and return the answer.
+        # Get database schema from markdown
+        db_schema = read_schema_from_markdown()
+
+        template = f"""You are an agent designed to interact with a SQL database.
+        Given an input question, create a syntactically correct {{dialect}} query to run, then look at the results of the query and return the answer.
         You can order the results by a relevant column to return the most interesting examples in the database.
         Never query for all the columns from a specific table, only ask for the relevant columns given the question.
+        User uses colloquial language to ask questions, so always refer to the Synonym words in the database schema information to understand the user's question first.
+        Here is the database schema information:
+        {db_schema}
+
+        If you need to filter on a proper noun like a dish name or ingredient name, or item modifier, or dish variant, you must ALWAYS first look up the filter value using the 'search_proper_nouns' tool! Do not try to guess at the proper name - use this function to find similar ones.
+        
+        When you do not find an item that user is looking for, present user with the closest match based on the category of the item, is_vegeterian, is_vegan, spicy_level, and cuisine. Just like how restaurant waiter would do.
 
         You have access to tools for interacting with the database.
         Only use the below tools. Only use the information returned by the below tools to construct your final answer.
         You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
         DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
 
-        To start you should ALWAYS look at the tables in the database to see what you can query.
-        Do NOT skip this step.
-        Then you should query the schema of the most relevant tables.
-
-        Available tools: {tool_names}
+        Available tools: {{tool_names}}
         
-        {tools}
+        {{tools}}
         
         Use the following format:
         
         Question: the input question you must answer
         Thought: you should always think about what to do
-        Action: the action to take, should be one of [{tool_names}]
+        Action: the action to take, should be one of [{{tool_names}}]
         Action Input: the input to the action
         Observation: the result of the action
         ... (this Thought/Action/Action Input/Observation can repeat N times)
@@ -95,9 +150,10 @@ def setup_agent(db: SQLDatabase) -> AgentExecutor:
         
         Begin!
         
-        Question: {input}
+        Question: {{input}}
         
-        {agent_scratchpad}"""
+        {{agent_scratchpad}}"""
+        print(template)
 
         prompt = PromptTemplate(
             template=template,

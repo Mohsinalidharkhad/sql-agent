@@ -8,4 +8,5 @@ ipython>=8.22.2
 openai>=1.12.0
 python-dotenv>=1.0.1
 typing-extensions>=4.9.0
-pydantic>=2.6.3 
+pydantic>=2.6.3
+pinecone-client>=3.0.0 
