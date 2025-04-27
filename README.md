@@ -46,6 +46,8 @@ This project implements a natural language to SQL agent using LangChain and Supa
    SUPABASE_USER=postgres
    SUPABASE_PASSWORD=your_supabase_db_password
    SUPABASE_PORT=5432
+   # Optional: Enable vector search with Pinecone
+   PINECONE_API_KEY=your_pinecone_api_key_here
    ```
 
 5. Replace the placeholder values in `.env` with your actual credentials:
@@ -90,11 +92,18 @@ You can ask questions like:
 
 ## Vector Database Features
 
-The vector database integration provides:
-- Semantic search for menu items and ingredients
+This project uses [Pinecone](https://www.pinecone.io/) for vector search. If you provide a `PINECONE_API_KEY` in your `.env`, the agent will enable semantic search and similarity queries for menu items, ingredients, and other high-cardinality columns. If you do not provide a Pinecone API key, vector search features will be disabled, but all other SQL agent features will work as normal.
+
+- Semantic search for menu items and ingredients (requires Pinecone)
 - Efficient handling of high-cardinality columns
 - Improved query accuracy for natural language processing
 - Fast similarity searches across large datasets
+
+### Environment Variables
+
+- `OPENAI_API_KEY`: Your OpenAI API key (required)
+- `SUPABASE_HOST`, `SUPABASE_DATABASE`, `SUPABASE_USER`, `SUPABASE_PASSWORD`, `SUPABASE_PORT`: Your Supabase database credentials (required)
+- `PINECONE_API_KEY`: Your Pinecone API key (optional, enables vector search)
 
 ## Restaurant Features (In Progress)
 

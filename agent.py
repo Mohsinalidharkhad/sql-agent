@@ -10,12 +10,13 @@ from langchain.chat_models import init_chat_model
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain.prompts import MessagesPlaceholder
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.agents.agent_toolkits import create_retriever_tool
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone
 from langchain_openai import OpenAIEmbeddings
+from langchain.memory import ConversationBufferWindowMemory
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -116,6 +117,15 @@ def setup_agent(db: SQLDatabase) -> AgentExecutor:
         # Get database schema from markdown
         db_schema = read_schema_from_markdown()
 
+        # Use a simple string buffer for chat history (optional)
+        # You can use ConversationBufferMemory if you want to keep history as a string
+        from langchain.memory import ConversationBufferMemory
+        memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            input_key="input",
+            output_key="output"
+        )
+
         template = f"""You are an agent designed to interact with a SQL database.
         Given an input question, create a syntactically correct {{dialect}} query to run, then look at the results of the query and return the answer.
         You can order the results by a relevant column to return the most interesting examples in the database.
@@ -133,10 +143,6 @@ def setup_agent(db: SQLDatabase) -> AgentExecutor:
         You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
         DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
 
-        Available tools: {{tool_names}}
-        
-        {{tools}}
-        
         Use the following format:
         
         Question: the input question you must answer
@@ -150,22 +156,31 @@ def setup_agent(db: SQLDatabase) -> AgentExecutor:
         
         Begin!
         
+        Previous conversation history (if any):
+        {{chat_history}}
+        
+        Here are the tools you have access to:
+        {{tools}}
+
         Question: {{input}}
         
         {{agent_scratchpad}}"""
-        print(template)
 
         prompt = PromptTemplate(
             template=template,
-            input_variables=["input", "dialect", "agent_scratchpad"],
+            input_variables=["input", "dialect", "agent_scratchpad", "chat_history"],
             partial_variables={
-                "tools": "\n".join([f"{tool.name}: {tool.description}" for tool in tools]),
                 "tool_names": ", ".join([tool.name for tool in tools])
             }
         )
         
         agent = create_react_agent(llm, tools, prompt)
-        agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+        agent_executor = AgentExecutor(
+            agent=agent,
+            tools=tools,
+            memory=memory,
+            verbose=True
+        )
         
         logger.info("Agent executor created successfully")
         return agent_executor
@@ -181,12 +196,20 @@ def query_agent(agent: AgentExecutor, query: str) -> str:
         # Execute the agent with the query
         result = agent.invoke({
             "input": query,
-            "dialect": dialect  # Pass the dialect variable
+            "dialect": dialect
         })
         logger.info(f"Raw agent result: {result}")
         
         if result and "output" in result:
-            return result["output"]
+            # Format the response nicely
+            response = result["output"]
+            # Log intermediate steps for debugging
+            if "intermediate_steps" in result:
+                logger.debug("Intermediate steps:")
+                for step in result["intermediate_steps"]:
+                    logger.debug(f"- Action: {step[0]}")
+                    logger.debug(f"- Result: {step[1]}\n")
+            return response
         else:
             logger.warning("No output in agent result")
             return "I apologize, but I couldn't generate a response. Please try asking about specific tables like 'dishes' or 'menu'."
