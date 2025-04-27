@@ -17,6 +17,11 @@ from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone
 from langchain_openai import OpenAIEmbeddings
 from langchain.memory import ConversationBufferWindowMemory
+# Langsmith tracing imports
+try:
+    from langsmith import traceable
+except ImportError:
+    traceable = lambda x=None, **kwargs: (lambda f: f) if x is None else x  # no-op if not installed
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -25,6 +30,13 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 logger.info("Environment variables loaded")
+
+# Set Langsmith tracing environment variables if not already set
+os.environ.setdefault("LANGSMITH_TRACING", "true")
+os.environ.setdefault("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+# Optionally, set LANGSMITH_API_KEY from env if present
+if "LANGSMITH_API_KEY" in os.environ:
+    os.environ["LANGSMITH_API_KEY"] = os.environ["LANGSMITH_API_KEY"]
 
 def read_schema_from_markdown() -> str:
     """Read and return the database schema from the markdown file."""
@@ -134,7 +146,9 @@ def setup_agent(db: SQLDatabase) -> AgentExecutor:
         Here is the database schema information:
         {db_schema}
 
-        If you need to filter on a proper noun like a dish name or ingredient name, or item modifier, or dish variant, you must ALWAYS first look up the filter value using the 'search_proper_nouns' tool! Do not try to guess at the proper name - use this function to find similar ones.
+
+        If Previous conversation history
+        If you need to filter on a proper noun like a dish name or ingredient name, or item modifier, or dish variant, you must ALWAYS first look up the filter value in the AI response in the Previous conversation history, if you find that value in the Previous AI response use it else find the exact proper noun using the 'search_proper_nouns' tool! Do not try to guess at the proper name - use this function to find similar ones.
         
         When you do not find an item that user is looking for, present user with the closest match based on the category of the item, is_vegeterian, is_vegan, spicy_level, and cuisine. Just like how restaurant waiter would do.
 
@@ -142,6 +156,8 @@ def setup_agent(db: SQLDatabase) -> AgentExecutor:
         Only use the below tools. Only use the information returned by the below tools to construct your final answer.
         You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
         DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
+        ALWAYS remove backticks from the query before executing it.
+        ALWAYS remove the extra quotation marks (if any) at the beginning and end of the query before executing it.
 
         Use the following format:
         
@@ -179,7 +195,8 @@ def setup_agent(db: SQLDatabase) -> AgentExecutor:
             agent=agent,
             tools=tools,
             memory=memory,
-            verbose=True
+            verbose=False,
+            handle_parsing_errors=True
         )
         
         logger.info("Agent executor created successfully")
@@ -219,6 +236,7 @@ def query_agent(agent: AgentExecutor, query: str) -> str:
         logger.error(error_msg, exc_info=True)
         return error_msg
 
+@traceable(name="main")
 def main():
     try:
         logger.info("Starting the application...")
